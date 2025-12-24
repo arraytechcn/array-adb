@@ -1,0 +1,8 @@
+id: arrayadb
+name: arrayadb
+version: 1.0.0
+author: zhu
+icon: ''
+desc: 牛逼
+files:
+  - adb-12-24.py
