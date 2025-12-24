@@ -34,7 +34,7 @@
 
 ## 通信协议
 
-### MaixCAM → ESP32 (UART)
+### 视觉模块 → ESP32 (UART)
 
 | 数值 | 含义 |
 |-----|------|
@@ -109,7 +109,7 @@ iou_th = 0.45   # IOU 阈值
 
 ```
 maix/
-├── adb-12-24.py          # MaixCAM 主程序
+├── adb-12-24.py          # 视觉识别主程序
 ├── array_now/
 │   ├── array_now.ino     # ESP32 主程序
 │   └── action.h          # 动作定义
