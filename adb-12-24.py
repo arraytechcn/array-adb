@@ -89,6 +89,9 @@ last_objs = []  # 上一帧的目标
 smooth_frames = 5  # 保持显示的帧数
 no_detect_frames = 0  # 未检测到目标的帧数
 
+# 目标跟踪（用于判断对向/同向车）
+last_obj_positions = {}  # {目标ID: (x, y)}
+
 def logo():
     logo_path = "/root/logo320.png"
     logo0 = cv2.imread(logo_path)
@@ -190,8 +193,29 @@ while not app.need_exit():
 
         for obj in objs:
             center_x = obj.x + obj.w // 2
+            center_y = obj.y + obj.h // 2
             index = int(center_x * 24 / frame_width)
             index = min(max(index, 0), 23)
+
+            # 目标距离估算（框越大距离越近）
+            if obj.h > 100:
+                dist_label = "近"
+            elif obj.h > 50:
+                dist_label = "中"
+            else:
+                dist_label = "远"
+
+            # 对向/同向车判断
+            obj_id = f"{index}"  # 简单用区域索引作为ID
+            direction = ""
+            if obj_id in last_obj_positions:
+                last_x = last_obj_positions[obj_id][0]
+                dx = center_x - last_x
+                if dx > 5:
+                    direction = "→"  # 向右移动
+                elif dx < -5:
+                    direction = "←"  # 向左移动
+            last_obj_positions[obj_id] = (center_x, center_y)
 
             if index != last_sent_index and (last_sent_number is None or abs(index - last_sent_number) > 1):
                 send_number(index)
@@ -202,8 +226,9 @@ while not app.need_exit():
             fill_width = obj.w
             fill_height = obj.h // 3
             img.draw_rect(obj.x, obj.y + obj.h - fill_height, fill_width, fill_height, color=image.COLOR_RED)
-            
-            msg = f' {obj.score:.2f}'
+
+            # 显示距离和方向
+            msg = f'{dist_label}{direction} {obj.score:.2f}'
             img.draw_string(obj.x, obj.y, msg, color=image.COLOR_WHITE)
 
         no_detection_count = 0
