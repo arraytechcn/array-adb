@@ -1,8 +1,12 @@
-# Array ADB - 自适应远光灯系统
+# Array ADB  
+Adaptive LED Matrix High Beam (ADB) Research Platform  
+for Samsung PixCell LED
 
-基于视觉识别 + ESP32 的夜间车辆检测与自适应远光灯（ADB）控制系统。
+Experimental adaptive driving beam system combining:
+PixCell LED control · OEM automotive optics · Vision-assisted logic
 
-## 系统架构
+⚠️ Research & evaluation only. Not street-legal.
+
 
 ```
 ┌─────────────────┐     UART 500000     ┌─────────────────┐     ESP-NOW     ┌─────────────────┐
@@ -10,131 +14,136 @@
 │   (YOLOv5)      │      0-100 数值      │     (MCU)       │                 │   (左/右)       │
 └─────────────────┘                     └─────────────────┘                 └─────────────────┘
 ```
+# System Architecture
 
-## 功能特性
+## Overview
 
-### 视觉识别模块 (adb-12-24.py)
+Array ADB is a modular research platform exploring adaptive LED matrix
+high-beam control using pixel-addressable automotive LEDs.
 
-| 功能 | 说明 |
-|-----|------|
-| YOLOv5 目标检测 | 识别夜间车辆（汽车、摩托车） |
-| 停车/行车检测 | 稳定性算法，95% 画面稳定判定停车 |
-| 环境亮度感知 | Weber-Fechner 对数模型，0-100 |
-| 目标平滑 | 防止检测闪烁，保持 5 帧 |
-| 24 区域分区 | 画面水平分为 24 个控制区域 |
+The system consists of:
+- Pixel LED driving layer
+- Beam control logic
+- Vision-assisted decision input
+- Vehicle signal abstraction
 
-### ESP32 MCU (array_now.ino)
+---
 
-| 功能 | 说明 |
-|-----|------|
-| 双 UART 接收 | 长焦 + 广角摄像头数据 |
-| ESP-NOW 控制 | 无线控制左右透镜模块 |
-| BLE 配置 | 蓝牙远程配置和调试 |
-| 状态指示 | WS2812 LED 状态显示 |
+## Hardware Stack
 
-## 通信协议
+### LED & Driver
 
-### 视觉模块 → ESP32 (UART)
+- Samsung PixCell LED (pixel-addressable automotive LED)
+- Custom-designed LED driver and control board
+- Independent pixel-level on/off and timing control
+- Thermal and electrical limits enforced in firmware
 
-| 数值 | 含义 |
-|-----|------|
-| 0-12 | 目标在左半区，控制左透镜 |
-| 13-23 | 目标在右半区，控制右透镜（值-12） |
-| 99 | 无目标，全开远光 |
-| 100 | 目标过多，关闭远光 |
+### Optical System
 
-### ESP32 → 透镜模块 (ESP-NOW)
+- OEM projection lenses sourced from:
+  - Tesla Model 3 headlight
+  - Tesla Model Y headlight
+- Dual bi-functional projector configuration
+- Optics reused strictly for laboratory evaluation
 
-```
-设备 ID 格式: array996000100290X
-- 左透镜: array9960001002908 (尾数 8)
-- 右透镜: array9960001002916 (尾数 6)
+---
 
-控制命令 (ID + 控制码):
-- 1-12: 调整角度档位 (adb1~adb12)
-- 666: 开启远光
-- 777: 关闭远光
-- 100: 近光模式
-```
+## Vision System
 
-## 硬件配置
+- Camera module: **MaixCam Pro**
+- AI compute capability: **up to 1 TOPS**
+- Primary functions:
+  - Ambient brightness estimation
+  - Scene-level awareness input
+- Vision output is used as an **assist signal**, not a safety-certified source
 
-### 视觉识别模块
-- 摄像头: 1080x720 → 540x360
-- 串口: /dev/ttyS0, 500000 波特率
-- 模型: model_159818.mud
+No claims are made regarding autonomous perception or object classification accuracy.
 
-### ESP32
-- uart_long: GPIO 5(RX), 4(TX) - 长焦
-- uart_wide: GPIO 16(RX), 17(TX) - 广角
-- LED: WS2812
+---
 
-## 参数调整
+## Control Flow
 
-### 停车检测 (adb-12-24.py)
-```python
-stable_threshold = 0.95  # 稳定比例阈值
-max_stable_count = 12    # 连续稳定次数 (约3秒)
-check_interval = 5       # 每5帧检测一次
-```
+Vision Input (Brightness / Scene State)
+        ↓
+ADB Decision Logic
+        ↓
+Pixel Mask / Beam Pattern
+        ↓
+PixCell LED Driver Output
+        ↓
+Optical Projection
 
-### 目标平滑
-```python
-smooth_frames = 5  # 目标消失后保持显示帧数
-```
+---
 
-### 检测参数
-```python
-conf_th = 0.5   # 置信度阈值
-iou_th = 0.45   # IOU 阈值
-```
+## Vehicle Interface (Abstracted)
 
-## 状态显示
+- CAN / LIN signals (implementation-dependent)
+- Signals are treated as generic inputs
+- No OEM firmware or proprietary databases included
 
-### 边框颜色
-| 颜色 | 状态 |
-|-----|------|
-| 绿色 | 无目标 |
-| 红色 | 检测到目标 (≤3个) |
-| 白色 | 目标过多 (>3个) |
-| 黄色 | 停车模式 |
+---
 
-### 目标信息
-| 显示 | 含义 |
-|-----|------|
-| 近/中/远 | 目标距离估算 |
-| → | 目标向右移动（可能对向车） |
-| ← | 目标向左移动（可能对向车） |
-| 0.85 | 检测置信度 |
+## Design Goals
 
-### 画面信息
-- 左下角: FPS
-- 上方中间: 环境亮度 (L:0-100)
-- 中心紫框: 亮度测量区域
-- 中心黄块: 停车状态 (STOP)
+- Research pixel-level beam shaping behavior
+- Evaluate vision-assisted ADB strategies
+- Maintain hardware and software modularity
+- Avoid OEM dependency or proprietary coupling
 
-## 可扩展参数
+---
 
-| 参数 | 获取方式 | 对 ADB 的帮助 |
-|-----|---------|--------------|
-| 目标距离 | 检测框大小估算 | ✅ 已实现 |
-| 对向/同向车 | 目标移动方向 | ✅ 已实现 |
-| 接近速度 | 连续帧位置变化 | 预判目标轨迹 |
-| 车灯类型 | 训练模型区分 | 区分远光灯、尾灯 |
-| 画面对比度 | 图像统计 | 雨雾天气检测 |
+## Non-Goals
 
-## 文件结构
+- Road-legal certification
+- Production-ready automotive deployment
+- OEM-equivalent perception or safety guarantees
 
-```
-maix/
-├── adb-12-24.py          # 视觉识别主程序
-├── array_now/
-│   ├── array_now.ino     # ESP32 主程序
-│   └── action.h          # 动作定义
-├── logo320.png           # 启动 Logo
-└── README.md             # 本文档
-```
 
-## 许可证
+## Legal & Safety Disclaimer
 
-MIT License
+This project is provided strictly for:
+
+- Research
+- Educational use
+- Engineering evaluation
+
+### NOT Intended For
+
+- Public road use
+- Commercial deployment
+- OEM integration
+- Safety-critical automotive systems
+
+### Regulatory Compliance
+
+This project does **NOT** claim compliance with:
+- ECE regulations
+- SAE standards
+- DOT requirements
+- Any regional automotive lighting laws
+
+Any use of this project on public roads may be illegal.
+
+---
+
+### Intellectual Property Notice
+
+- No OEM firmware, source code, or confidential documentation is included
+- All control logic is independently implemented
+- References to automotive brands or components are descriptive only
+
+Tesla, Samsung, and other brand names are used solely to identify
+hardware sources and do not imply endorsement or affiliation.
+
+---
+
+### Liability
+
+The authors assume **no responsibility** for:
+- Personal injury
+- Property damage
+- Legal consequences
+- Regulatory violations
+
+Use at your own risk.
+
