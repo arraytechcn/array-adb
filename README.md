@@ -1,103 +1,83 @@
-# Array ADB  
-Adaptive LED Matrix High Beam (ADB) Research Platform  
+# Array ADB
+
+Adaptive LED Matrix High Beam **Research Platform**  
 for Samsung PixCell LED
 
-Experimental adaptive driving beam system combining:
-PixCell LED control · OEM automotive optics · Vision-assisted logic
+Array ADB is an experimental automotive lighting research project focused on
+pixel-addressable LED control and adaptive driving beam (ADB) behavior.
 
 ⚠️ Research & evaluation only. Not street-legal.
 
-
-```
-┌─────────────────┐     UART 500000     ┌─────────────────┐     ESP-NOW     ┌─────────────────┐
-│   视觉识别模块   │ ──────────────────► │     ESP32       │ ──────────────► │   透镜模块      │
-│   (YOLOv5)      │      0-100 数值      │     (MCU)       │                 │   (左/右)       │
-└─────────────────┘                     └─────────────────┘                 └─────────────────┘
-```
-# System Architecture
+---
 
 ## Overview
 
-Array ADB is a modular research platform exploring adaptive LED matrix
-high-beam control using pixel-addressable automotive LEDs.
+This project explores **adaptive LED matrix high-beam control** using
+Samsung PixCell LEDs, custom control hardware, and vision-assisted decision logic.
 
-The system consists of:
-- Pixel LED driving layer
-- Beam control logic
-- Vision-assisted decision input
-- Vehicle signal abstraction
+The goal is to evaluate pixel-level beam shaping strategies and system
+architectures for next-generation automotive lighting.
 
 ---
 
-## Hardware Stack
+## Key Features
 
-### LED & Driver
+- Samsung PixCell LED control algorithm
+- Custom-designed LED driver and control hardware
+- Adaptive LED Matrix High Beam (ADB-style logic)
+- Pixel-level beam masking and timing control
+- Vision-assisted input for experimental decision making
+- Modular firmware and hardware architecture
 
-- Samsung PixCell LED (pixel-addressable automotive LED)
-- Custom-designed LED driver and control board
-- Independent pixel-level on/off and timing control
-- Thermal and electrical limits enforced in firmware
+---
 
-### Optical System
+## Optical System
 
-- OEM projection lenses sourced from:
-  - Tesla Model 3 headlight
-  - Tesla Model Y headlight
+- OEM projection lenses sourced from **Tesla Model 3 / Model Y** headlights
+- Used solely for **optical evaluation and beam pattern research**
 - Dual bi-functional projector configuration
-- Optics reused strictly for laboratory evaluation
+
+OEM components are reused strictly for laboratory and research purposes.
 
 ---
 
 ## Vision System
 
-- Camera module: **MaixCam Pro**
+- Vision device: **MaixCam Pro**
 - AI compute capability: **up to 1 TOPS**
-- Primary functions:
+- Used for:
   - Ambient brightness estimation
   - Scene-level awareness input
-- Vision output is used as an **assist signal**, not a safety-certified source
 
-No claims are made regarding autonomous perception or object classification accuracy.
+Vision output is **non-safety-critical** and used for
+**experimental decision support only**.
 
----
-
-## Control Flow
-
-Vision Input (Brightness / Scene State)
-        ↓
-ADB Decision Logic
-        ↓
-Pixel Mask / Beam Pattern
-        ↓
-PixCell LED Driver Output
-        ↓
-Optical Projection
+No claims are made regarding perception accuracy or autonomous driving capability.
 
 ---
 
-## Vehicle Interface (Abstracted)
+## System Architecture (High Level)
 
-- CAN / LIN signals (implementation-dependent)
-- Signals are treated as generic inputs
-- No OEM firmware or proprietary databases included
+Vision Input
+→ ADB Decision Logic
+→ Pixel Mask Generation
+→ PixCell LED Driver
+→ Optical Projection
 
----
-
-## Design Goals
-
-- Research pixel-level beam shaping behavior
-- Evaluate vision-assisted ADB strategies
-- Maintain hardware and software modularity
-- Avoid OEM dependency or proprietary coupling
+Vehicle signals (e.g. CAN / LIN) are treated as abstract inputs.
+No OEM firmware or proprietary databases are included.
 
 ---
 
-## Non-Goals
+## Keywords
 
-- Road-legal certification
-- Production-ready automotive deployment
-- OEM-equivalent perception or safety guarantees
+- Adaptive LED Matrix High Beams  
+- ADB (Adaptive Driving Beam)  
+- Samsung PixCell LED  
+- Automotive Lighting R&D  
+- Vision-assisted beam control  
 
+---
 
 ## Legal & Safety Disclaimer
 
@@ -111,39 +91,35 @@ This project is provided strictly for:
 
 - Public road use
 - Commercial deployment
-- OEM integration
+- Production vehicles
 - Safety-critical automotive systems
 
 ### Regulatory Compliance
 
 This project does **NOT** claim compliance with:
-- ECE regulations
-- SAE standards
-- DOT requirements
-- Any regional automotive lighting laws
+ECE, SAE, DOT, or any regional automotive lighting regulations.
 
-Any use of this project on public roads may be illegal.
+Nothing in this repository constitutes an offer for sale or commercial use.
 
 ---
 
 ### Intellectual Property Notice
 
 - No OEM firmware, source code, or confidential documentation is included
-- All control logic is independently implemented
-- References to automotive brands or components are descriptive only
+- All control logic is independently developed
+- References to Tesla, Samsung, or other brands are descriptive only
 
-Tesla, Samsung, and other brand names are used solely to identify
-hardware sources and do not imply endorsement or affiliation.
+Brand names are used solely to identify hardware sources and do not imply
+endorsement or affiliation.
 
 ---
 
 ### Liability
 
-The authors assume **no responsibility** for:
+The authors assume no responsibility for:
 - Personal injury
 - Property damage
 - Legal consequences
 - Regulatory violations
 
 Use at your own risk.
-
