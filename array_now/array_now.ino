@@ -2,9 +2,8 @@
 const char *serviceUUID = "996000000000";  // 替换为您的服务UUID
 const char *charUUID = "996000000000";     // 替换为您的特征值UUID
 const char *deviceName = "996000000000";
-String adb_L_Id = "array9960001002908";  // 边结尾是 8  凯美瑞
-String adb_R_Id = "array9960001002916";  // 右边结尾是 6 凯美瑞
-// String adb_L_Id = "array9960001002778";  // 边结尾是 8  任
+String adb_L_Id = "array996000100680";  // 左灯 17字符
+String adb_R_Id = "array996000100291";  // 右灯 17字符   
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer *pServer) {
@@ -237,11 +236,23 @@ void readBleconfig1() {
 }
 
 void setup() {
-  uart_long.begin(500000, SERIAL_8N1, 5, 4);
-  uart_wide.begin(500000, SERIAL_8N1, 16, 17);
-  // lin.begin(19200, SERIAL_8N1, 16, 17);
+  uart_cam.begin(500000, SERIAL_8N1, 16, 17);  // 单目摄像头
   Serial.begin(115200);
-  readBleconfig1();
+  Serial.println("array_now 启动");
+
+  // 初始化BLE (用于被小程序连接配置)
+  BLEDevice::init("arrayadb_now");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  pService = pServer->createService("0000FFF0-0000-1000-8000-996000000000");
+  pCharacteristic = pService->createCharacteristic(
+    "0000FFF1-0000-1000-8000-996000000000",
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  pCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  pServer->getAdvertising()->start();
+
   WiFi.mode(WIFI_STA);
 
   if (esp_now_init() != ESP_OK) {
@@ -249,213 +260,238 @@ void setup() {
     return;
   }
 
-  esp_now_peer_info_t peerInfo1, peerInfo2;
+  esp_now_peer_info_t peerInfo1;
+  memset(&peerInfo1, 0, sizeof(peerInfo1));
   memcpy(peerInfo1.peer_addr, broadcastAddress1, 6);
-  memcpy(peerInfo2.peer_addr, broadcastAddress2, 6);
-  esp_now_add_peer(&peerInfo1);
-  esp_now_add_peer(&peerInfo2);
-  // delay(2333);
+  peerInfo1.channel = 0;  // 0 = 当前channel
+  peerInfo1.encrypt = false;
+  if (esp_now_add_peer(&peerInfo1) != ESP_OK) {
+    Serial.println("添加peer失败");
+  } else {
+    Serial.println("添加peer成功");
+  }
 
-  // sendData("array9960001002916666", broadcastAddress1);
-  // delay(333);
-  // sendData("array9960001002916777", broadcastAddress1);
-  // delay(333);
-  // sendData("array9960001002916666", broadcastAddress1);
-  // delay(333);
-  // sendData("array9960001002916777", broadcastAddress1);
-  // delay(333);
-  // delay(2333);
   pixels.begin();
   pixels.setBrightness(6);
+
+  // ADB 测试动画：下两排全开，上两排移动
+  delay(1000);
+  Serial.println("ADB 测试开始");
+
+  // Row2: 28-55, Row3: 200-227 (下两排，固定全开)
+  // Row0: 80-101 (去掉null), Row1: 56-79 (去掉null) (上两排，做移动)
+
+  // 全开
+  uint8_t allLeds[112];
+  int cnt = 0;
+  for (int i = 80; i <= 101; i++) allLeds[cnt++] = i;   // Row0: 22个
+  for (int i = 56; i <= 79; i++) allLeds[cnt++] = i;    // Row1: 24个
+  for (int i = 28; i <= 55; i++) allLeds[cnt++] = i;    // Row2: 28个
+  for (int i = 200; i <= 227; i++) allLeds[cnt++] = i;  // Row3: 28个
+  Serial.print("全开LED总数: ");
+  Serial.println(cnt);  // 应该是 102
+  Serial.print("最后几个LED ID: ");
+  Serial.print(allLeds[cnt-3]); Serial.print(",");
+  Serial.print(allLeds[cnt-2]); Serial.print(",");
+  Serial.println(allLeds[cnt-1]);  // 应该是 225,226,227
+  sendLedIds(adb_L_Id, allLeds, cnt, broadcastAddress1);
+  sendLedIds(adb_R_Id, allLeds, cnt, broadcastAddress1);
+  delay(1000);
+
+  // 上两排逐渐遮挡（从右向左）
+  for (int col = 24; col >= 5; col -= 2) {
+    cnt = 0;
+    // Row0: 80+col (col 3-24 有效)
+    for (int c = 3; c <= col; c++) allLeds[cnt++] = 80 + (c - 3);
+    // Row1: 56+col (col 2-25 有效)
+    for (int c = 2; c <= col; c++) allLeds[cnt++] = 56 + (c - 2);
+    // Row2 & Row3 全开
+    for (int i = 28; i <= 55; i++) allLeds[cnt++] = i;
+    for (int i = 200; i <= 227; i++) allLeds[cnt++] = i;
+    sendLedIds(adb_L_Id, allLeds, cnt, broadcastAddress1);
+    sendLedIds(adb_R_Id, allLeds, cnt, broadcastAddress1);
+    delay(600);
+  }
+  delay(1000);
+
+  // 上两排逐渐恢复
+  for (int col = 5; col <= 24; col += 2) {
+    cnt = 0;
+    for (int c = 3; c <= col; c++) allLeds[cnt++] = 80 + (c - 3);
+    for (int c = 2; c <= col; c++) allLeds[cnt++] = 56 + (c - 2);
+    for (int i = 28; i <= 55; i++) allLeds[cnt++] = i;
+    for (int i = 200; i <= 227; i++) allLeds[cnt++] = i;
+    sendLedIds(adb_L_Id, allLeds, cnt, broadcastAddress1);
+    sendLedIds(adb_R_Id, allLeds, cnt, broadcastAddress1);
+    delay(600);
+  }
+
+  // 全开
+  cnt = 0;
+  for (int i = 80; i <= 101; i++) allLeds[cnt++] = i;
+  for (int i = 56; i <= 79; i++) allLeds[cnt++] = i;
+  for (int i = 28; i <= 55; i++) allLeds[cnt++] = i;
+  for (int i = 200; i <= 227; i++) allLeds[cnt++] = i;
+  sendLedIds(adb_L_Id, allLeds, cnt, broadcastAddress1);
+  sendLedIds(adb_R_Id, allLeds, cnt, broadcastAddress1);
+  Serial.println("ADB 测试完成");
 }
 void adbmain() {
 }
+
+// LED 位置映射（与 headlight 一致）
+const uint8_t LED_ROW0[] = {0,0,0, 80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101, 0,0,0};  // 22个有效
+const uint8_t LED_ROW1[] = {0,0, 56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79, 0,0};  // 24个有效
+const uint8_t LED_ROW2[] = {28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55};  // 28个
+const uint8_t LED_ROW3[] = {200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227};  // 28个
+
+// 构建 ADB LED 列表：上两行根据列范围，下两行全开
+void buildAdbLeds(uint8_t* leds, int& count, int fromCol, int toCol) {
+  count = 0;
+  // 上两行：根据列范围点亮
+  for (int col = fromCol; col <= toCol && col < 28; col++) {
+    if (LED_ROW0[col] > 0) leds[count++] = LED_ROW0[col];
+  }
+  for (int col = fromCol; col <= toCol && col < 28; col++) {
+    if (LED_ROW1[col] > 0) leds[count++] = LED_ROW1[col];
+  }
+  // 下两行：始终全开
+  for (int i = 0; i < 28; i++) leds[count++] = LED_ROW2[i];
+  for (int i = 0; i < 28; i++) leds[count++] = LED_ROW3[i];
+}
+
+// 全开 LED 列表（缓存）
+uint8_t allLedsCache[112];
+int allLedsCacheCount = 0;
+unsigned long lastSendTime = 0;
+bool testModeSent = false;  // 测试模式是否已发送
+
+// 状态缓存，避免重复发送
+uint8_t last_l_start = 255, last_l_end = 255;
+uint8_t last_r_start = 255, last_r_end = 255;
+
+// 命令队列
+struct LedCommand {
+  String prefix;
+  uint8_t ledIds[112];
+  uint8_t count;
+  bool valid;
+};
+#define QUEUE_SIZE 8
+LedCommand cmdQueue[QUEUE_SIZE];
+int queueHead = 0;
+int queueTail = 0;
+unsigned long lastQueueSendTime = 0;
+const unsigned long QUEUE_SEND_INTERVAL = 100;  // 队列发送间隔 100ms
+
+// 添加命令到队列
+void enqueueCmd(String prefix, uint8_t* leds, uint8_t cnt) {
+  int nextTail = (queueTail + 1) % QUEUE_SIZE;
+  if (nextTail == queueHead) {
+    // 队列满，丢弃最旧的
+    queueHead = (queueHead + 1) % QUEUE_SIZE;
+  }
+  cmdQueue[queueTail].prefix = prefix;
+  cmdQueue[queueTail].count = cnt;
+  for (int i = 0; i < cnt; i++) {
+    cmdQueue[queueTail].ledIds[i] = leds[i];
+  }
+  cmdQueue[queueTail].valid = true;
+  queueTail = nextTail;
+}
+
+// 处理队列中的命令
+void processQueue() {
+  if (queueHead == queueTail) return;  // 队列空
+  if (millis() - lastQueueSendTime < QUEUE_SEND_INTERVAL) return;  // 间隔未到
+
+  if (cmdQueue[queueHead].valid) {
+    sendLedIds(cmdQueue[queueHead].prefix, cmdQueue[queueHead].ledIds,
+               cmdQueue[queueHead].count, broadcastAddress1);
+    cmdQueue[queueHead].valid = false;
+  }
+  queueHead = (queueHead + 1) % QUEUE_SIZE;
+  lastQueueSendTime = millis();
+}
+
 void loop() {
+  // 先处理队列中的命令
+  processQueue();
 
-  uart_long_data = uart_long.read();
-  uart_long_int = uart_long_data.toInt();
-  if (uart_long_int >= 0) {
-    zhulong = uart_long_int;
-  } else {
-    zhulong = "0";
-  }
-  uart_wide_data = uart_wide.read();
-  uart_wide_int = uart_wide_data.toInt();
-  if (uart_wide_int >= 0) {
-    zhuwide = uart_wide_int;
-  } else {
-    zhuwide = "0";
-  }
-  if (uart_long_int >= 1) {
-  }
-  // adbmain();
+  // 读取二进制数据（5字节：0xAA + L_start + L_end + R_start + R_end）
+  if (uart_cam.available() >= 5) {
+    uint8_t header = uart_cam.read();
+    if (header == 0xAA) {
+      uint8_t l_start = uart_cam.read();
+      uint8_t l_end = uart_cam.read();
+      uint8_t r_start = uart_cam.read();
+      uint8_t r_end = uart_cam.read();
 
+      // 只有状态变化时才加入队列
+      bool l_changed = (l_start != last_l_start);
+      bool r_changed = (r_end != last_r_end);
 
-  int value = uart_long_int;
-  if (value == 99) {
-    // sendData(adb_R_Id + "666", broadcastAddress1);
-    adb_L = "99";
-    adb_R = "99";  // 此处可以考虑是否需要与代码逻辑一致进行赋值
-    // // onL();
-    // // onR();
-    adblight(123);
-    Serial.println("full1");
-    // count++;
-    zhustatus = "~~~~远光全开";
-
-    if (value == 99) {
-      // onL();
-      // onR();
-      count++;  // 每次检测到99就增加计数器
-      while (count >= 8) {
-        // delay(30);  // 可以添加延迟，让你看到计数的过程（非必须）
-        onL();  // 如果在计数未满10次之前再次检测到99，则再执行一次onLeft
-        onR();
-        fulllight(123);
-        count = 0;
-        break;
+      if (l_changed) {
+        uint8_t ledIds[112];
+        int ledCount = 0;
+        if (l_start == 255) {
+          buildAdbLeds(ledIds, ledCount, 0, 27);
+        } else {
+          buildAdbLeds(ledIds, ledCount, 0, l_start > 0 ? l_start - 1 : -1);
+        }
+        enqueueCmd(adb_L_Id, ledIds, ledCount);  // 加入队列
+        last_l_start = l_start;
+        last_l_end = l_end;
       }
-      Serial.print("ci:");
-      Serial.println(count);
 
-    } else {
-      offL();
-      offR();
-      count = 0;
-      adblight(133);
-      Serial.println("adb3");
-    }
-
-
-  } else if (value == 100) {
-    // 特殊情况处理（如果需要处理）
-    adb_L = "100";
-    adb_R = "100";
-    offR();
-    offL();
-    lowBeam();
-    Serial.println("low1");
-    zhustatus = "返回近光____";
-
-  } else if (value >= 13 && value < 25) {  // 确保此条件与前面的条件互斥
-    offR();
-    offL();
-    adb_L = 992;
-    int adb_R_str = value - 12;
-    adb_R = String(adb_R_str);
-    zhustatus = "触发右边动作";
-    //   // Serial.println(adb_R_str);
-    // } else if (value == 12 || value == 11) {
-    //   offR();
-    //   offL();
-    //   adb_L = String(value);
-    //   adb_R = 5;
-    //   zhustatus = "@触发左中心位置";
-    // } else if (value == 13 || value == 14) {
-    //   offR();
-    //   offL();
-    //   adb_L = 9;
-    //   int adb_R_str = value - 12;
-    //   adb_R = String(adb_R_str);
-    //   zhustatus = "触发右中心位置$";
-  } else if (value < 13) {
-    adb_L = value;
-    adb_R = 991;
-    // Serial.print("value:");
-    // Serial.println(value);
-    zhustatus = "左边动作";
-  } else {
-    zhustatus = "未获取到摄像头状态";
-    errlight();
-  }
-
-  int adbLint = adb_L.toInt();
-  int adbRint = adb_R.toInt();
-
-  // if (adbLint == 99 && adbRint == 99) {
-  //   // 这里可以添加相应的逻辑处理，例如特定的操作或信息收集
-  // } else {
-  //   }
-  // Serial.print("ADB Left:");
-  // Serial.println(adb_L);  // 打印左半部分数据
-  // Serial.print("ADB Right:");
-  // Serial.println(adb_R);  // 打印右半部分数据
-  // Serial.println("【adb L】：" + String(adb_L) + "【adb R】：" + String(adb_R));
-  // sendData(adb_R_Id + "666", broadcastAddress1);
-  // Serial.println("-----------广角：开右边激光---------");
-  if (uart_wide_int == 66) {
-    String dataToSend1 = adb_L_Id + "100";
-    String dataToSend2 = adb_R_Id + "100";
-    sendData(dataToSend1, broadcastAddress1);
-    sendData(dataToSend2, broadcastAddress1);
-    // Serial.println("广角数据：66, 不开 adb");
-    offL();
-    offR();
-    lowBeam();
-    count = 0;
-    // Serial.println("low2");
-    // } else if (uart_wide_int >= 0 && uart_wide_int <= 4) {
-    //   String dataToSend1 = adb_L_Id + "1";  //
-    //   sendData(dataToSend1, broadcastAddress1);
-    // } else if (uart_wide_int >= 20 && uart_wide_int <= 24) {
-    //   String dataToSend2 = adb_R_Id + "12";  //
-    //   sendData(dataToSend2, broadcastAddress1);
-    Serial.println("【adb状态】：" + String(zhustatus) + "【长焦】：" + String(zhulong) + "【广角】：" + String(zhuwide) + "【左透镜】：" + String(headlightL) + "【右透镜】：" + String(headlightR) + "【adb L】：" + String(adb_L) + "【adb R】：" + String(adb_R));
-
-  } else {
-    Serial.print("长焦：");
-    Serial.println(value);
-    if (value == 99) {
-      // onL();
-      // onR();
-      count++;  // 每次检测到99就增加计数器
-      while (count >= 5) {
-        // delay(30);  // 可以添加延迟，让你看到计数的过程（非必须）
-        onL();  // 如果在计数未满10次之前再次检测到99，则再执行一次onLeft
-        onR();
-        fulllight(123);
-        count = 0;
-        break;
+      if (r_changed) {
+        uint8_t ledIds[112];
+        int ledCount = 0;
+        if (r_start == 255) {
+          buildAdbLeds(ledIds, ledCount, 0, 27);
+        } else {
+          buildAdbLeds(ledIds, ledCount, r_end < 27 ? r_end + 1 : 28, 27);
+        }
+        enqueueCmd(adb_R_Id, ledIds, ledCount);  // 加入队列
+        last_r_start = r_start;
+        last_r_end = r_end;
       }
-      Serial.print("ci:");
-      Serial.println(count);
 
-    } else {
-      offL();
-      offR();
-      count = 0;
-      adblight(133);
-      Serial.println("adb3");
-    }
+      // LED 状态指示
+      if (l_start == 255 && r_start == 255) {
+        fulllight(123);
+      } else {
+        adblight(133);
+      }
 
-
-    if (adbLint >= 0) {
-      String dataToSend1 = adb_L_Id + adbLint;
-      sendData(dataToSend1, broadcastAddress1);
-      delay(33);
+      lastSendTime = millis();
+      testModeSent = false;
     }
-    if (adbRint >= 0) {
-      String dataToSend2 = adb_R_Id + adbRint;
-      sendData(dataToSend2, broadcastAddress1);
-      delay(33);
+  } else {
+    // 没有摄像头数据时，只发送一次全开命令
+    if (!testModeSent && millis() - lastSendTime > 3000) {
+      if (allLedsCacheCount == 0) {
+        for (int i = 80; i <= 101; i++) allLedsCache[allLedsCacheCount++] = i;
+        for (int i = 56; i <= 79; i++) allLedsCache[allLedsCacheCount++] = i;
+        for (int i = 28; i <= 55; i++) allLedsCache[allLedsCacheCount++] = i;
+        for (int i = 200; i <= 227; i++) allLedsCache[allLedsCacheCount++] = i;
+      }
+      enqueueCmd(adb_L_Id, allLedsCache, allLedsCacheCount);
+      enqueueCmd(adb_R_Id, allLedsCache, allLedsCacheCount);
+      Serial.println("空闲: 全开");
+      testModeSent = true;
     }
-    if (value >= 0) {
-      Serial.println("【adb状态】：" + String(zhustatus) + "【长焦】：" + String(zhulong) + "【广角】：" + String(zhuwide) + "【左透镜】：" + String(headlightL) + "【右透镜】：" + String(headlightR) + "【adb L】：" + String(adb_L) + "【adb R】：" + String(adb_R));
-    }
-    // Serial.println("64, 环境够黑，可以开 adb");
   }
 
-  // Serial.println("【长焦】：" + String(zhulong) + "【广角】：" + String(zhuwide) + "【左透镜】：" + String(headlightL) + "【右透镜】：" + String(headlightR) + "【adb L】：" + String(adb_L) + "【adb R】：" + String(adb_R));
-
-  delay(13);
+  delay(5);
 }
 void onL() {
-  sendData("array9960001002906666", broadcastAddress1);
+  sendData(adb_L_Id + "666", broadcastAddress1);
   headlightL = "开";
   count = 0;
 }
 void offL() {
-  sendData("array9960001002906777", broadcastAddress1);
+  sendData(adb_L_Id + "777", broadcastAddress1);
   headlightL = "关";
   count = 0;
 }
@@ -475,4 +511,22 @@ void sendData(String data, uint8_t *receiverAddress) {
   Serial.println(data);
   // Send data
   esp_now_send(receiverAddress, dataBytes, data.length() + 1);
+}
+
+// 发送 LED ID 列表: prefix + 'S' + count + ids
+void sendLedIds(String prefix, uint8_t* ledIds, uint8_t count, uint8_t* receiverAddress) {
+  uint8_t data[150];
+  int len = prefix.length();
+  // 手动复制，避免 getBytes 添加 null 终止符
+  for (int i = 0; i < len; i++) {
+    data[i] = prefix[i];
+  }
+  data[len] = 'S';
+  data[len + 1] = count;
+  for (int i = 0; i < count; i++) {
+    data[len + 2 + i] = ledIds[i];
+  }
+  Serial.print("发送LED数量: ");
+  Serial.println(count);
+  esp_now_send(receiverAddress, data, len + 2 + count);
 }

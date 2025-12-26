@@ -29,25 +29,20 @@ String tempdeviceNameUUID = "arrayadb996000000000";
 BLEServer *pServer;
 BLEService *pService;
 BLECharacteristic *pCharacteristic;
-HardwareSerial uart_long(1);
-HardwareSerial uart_wide(2);
+HardwareSerial uart_cam(1);  // 单目摄像头
 // Replace the following with the MAC address of your receiver devices
-uint8_t broadcastAddress1[] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB };
+uint8_t broadcastAddress1[] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };  // 广播地址
 uint8_t broadcastAddress2[] = { 0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56 };
 const int channel = 1;  // Set Wi-Fi channel
 String uart_data;
 String adb_L;
 String adb_R;
 String arrayadbId = "array";
-String uart_long_data;
-String uart_wide_data;
+String uart_cam_data;
 String headlightL;
 String headlightR;
 String zhustatus;
-String zhulong;
-String zhuwide;
-int uart_wide_int;
-int uart_long_int;
+int uart_cam_int;
 int count = 0; // 添加计数器变量
 
 bool writeBleFile(const char *u1, const char *u2) {

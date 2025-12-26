@@ -15,7 +15,7 @@ blue_box_thickness = 6  # 蓝色方框的粗细
 
 # UART设备和YOLOv5模型设置
 device = "/dev/ttyS0"
-# serial = uart.UART(device, 500000)  # ESP32 暂时禁用
+serial = uart.UART(device, 500000)  # ESP32 转发器
 save_counter = 0
 
 # GPS 模块（暂时禁用）
@@ -137,16 +137,7 @@ no_detection_count = 0
 max_no_detection = 10
 consecutive_detection_count = 0  # 新增计数器
 
-# 停车/行车检测（四区域检测：上方路灯+中心路面+左右边缘）
-prev_top = None
-prev_center = None
-prev_left_edge = None
-prev_right_edge = None
-stable_threshold = 0.85  # 稳定比例阈值
-diff_threshold = 15      # 像素差异阈值
-stable_count = 0
-max_stable_count = 25
-is_parked = False
+# 环境亮度检测
 check_interval = 5
 frame_counter = 0
 brightness = 0  # 环境亮度
@@ -163,9 +154,115 @@ last_obj_positions = {}  # {目标ID: (x, y)}
 left_box = None   # (min_x, min_y, max_x, max_y)
 right_box = None
 box_smooth_speed = 0.15  # 扩展速度 (越小越慢，效果越明显)
-left_box_hold = 0   # 左框保持计数
-right_box_hold = 0  # 右框保持计数
-box_hold_frames = 50  # 目标消失后保持的帧数
+recover_col_speed = 1.0  # 恢复动画速度（每帧移动的列数）
+left_shade_col_range = None  # 左侧遮挡的列范围 (start, end)
+right_shade_col_range = None  # 右侧遮挡的列范围 (start, end)
+left_recover_col = None  # 左侧恢复到的列号（浮点数）
+right_recover_col = None  # 右侧恢复到的列号（浮点数）
+
+# LED 网格参数 (28列 x 4行)
+LED_COLS = 28
+LED_ROWS = 4
+LED_SIZE = 8  # LED 直径
+LED_GAP = 1   # LED 间距
+LED_GRID_WIDTH = LED_COLS * (LED_SIZE + LED_GAP)  # 约 252 像素
+LED_GRID_HEIGHT = LED_ROWS * (LED_SIZE + LED_GAP)  # 约 36 像素
+LED_GRID_Y = new_height - 110  # 底部，不遮挡FPS
+LED_LEFT_X = 10  # 左灯网格起始 X
+LED_RIGHT_X = new_width - LED_GRID_WIDTH - 10  # 右灯网格起始 X
+
+# LED 布局 - null 位置用 None 表示（与小程序一致）
+LED_LAYOUT = {
+    0: [None, None, None, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, None, None, None],
+    1: [None, None, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, None, None],
+    2: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    3: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+}
+
+# LED ID 映射（与小程序一致）- 用于发送到 ESP32
+LED_IDS = {
+    0: [None, None, None, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, None, None, None],
+    1: [None, None, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, None, None],
+    2: [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55],
+    3: [200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227],
+}
+
+# 遮挡状态（用于发送到 ESP32）
+# 格式紧凑：只发送列范围，255=无遮挡
+last_sent_shade = None  # (left_start, left_end, right_start, right_end)
+shade_change_threshold = 2  # 变化超过2列才发送
+
+def send_shade_to_esp32(left_start, left_end, right_start, right_end):
+    """发送遮挡状态到 ESP32（5字节二进制）
+    格式：[0xAA, 左起始列, 左结束列, 右起始列, 右结束列]
+    0xAA = 帧头，255 = 无遮挡
+    """
+    global last_sent_shade
+    state = (left_start, left_end, right_start, right_end)
+
+    # 防抖：只有变化超过阈值才发送
+    if last_sent_shade is not None:
+        l_s, l_e, r_s, r_e = last_sent_shade
+        # 检查是否有显著变化
+        l_changed = (left_start == 255) != (l_s == 255) or (left_start != 255 and abs(left_start - l_s) > shade_change_threshold)
+        r_changed = (right_start == 255) != (r_s == 255) or (right_end != 255 and abs(right_end - r_e) > shade_change_threshold)
+        if not l_changed and not r_changed:
+            return  # 变化太小，跳过发送
+
+    last_sent_shade = state
+    # 发送二进制数据：帧头 + 4字节数据
+    data = bytes([0xAA, left_start, left_end, right_start, right_end])
+    serial.write(data)
+
+def draw_led_grid(img, grid_x, grid_y, shade_start_col, shade_end_col, is_recovering=False, recover_col=None, is_left=True):
+    """绘制 LED 网格
+    shade_start_col, shade_end_col: 遮挡的列范围 (0-27)
+    is_recovering: 是否在恢复动画中
+    recover_col: 恢复到的列位置
+    is_left: 是否是左灯（影响恢复方向）
+    注意：只有上两排（第0、1行）响应遮挡，下两排（第2、3行）始终点亮
+    """
+    for row in range(LED_ROWS):
+        for col in range(LED_COLS):
+            # 检查该位置是否存在 LED
+            if LED_LAYOUT[row][col] is None:
+                continue  # 跳过 null 位置
+
+            x = grid_x + col * (LED_SIZE + LED_GAP)
+            y = grid_y + row * (LED_SIZE + LED_GAP)
+
+            # 下两排（第2、3行）始终点亮
+            if row >= 2:
+                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_WHITE, thickness=-1)
+                continue
+
+            # 上两排判断是否被遮挡
+            is_shaded = shade_start_col <= col <= shade_end_col
+            is_recovered = False  # 是否是���恢复的（显示紫色）
+
+            # 恢复动画：紫色只显示在恢复前沿，推过的地方变白
+            if is_recovering and recover_col is not None and is_shaded:
+                if is_left:
+                    # 左灯：recover_col 从 start 向 end 增加，col <= recover_col 的已恢复
+                    if col <= recover_col:
+                        # 紫色前沿（2列宽度）
+                        if col > recover_col - 2:
+                            is_recovered = True
+                        is_shaded = False  # 已恢复的不再是灰色
+                else:
+                    # 右灯：recover_col 从 end 向 start 减少，col >= recover_col 的已恢复
+                    if col >= recover_col:
+                        # 紫色前沿（2列宽度）
+                        if col < recover_col + 2:
+                            is_recovered = True
+                        is_shaded = False  # 已恢复的不再是灰色
+
+            if is_shaded:
+                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_GRAY, thickness=-1)
+            elif is_recovered:
+                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_PURPLE, thickness=-1)
+            else:
+                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_WHITE, thickness=-1)
 
 def logo():
     logo_path = "/root/logo320.png"
@@ -196,57 +293,13 @@ while not app.need_exit():
     # 保存原始图像以供保存使用（没有边框）
     original_img = img.copy()
 
-    # 停车/行车检测（混合检测：中心+边缘，每5帧一次）
+    # 计算环境亮度（每5帧一次）
     frame_counter += 1
     if frame_counter >= check_interval:
         frame_counter = 0
         cv_img = image.image2cv(img)
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
         gray = cv2.resize(gray, (135, 90))
-
-        # 提取四个区域
-        top = gray[:25, 30:105]       # 上方路灯区域
-        center = gray[40:70, 30:105]  # 中心路面区域
-        left_edge = gray[:, :25]      # 左边缘
-        right_edge = gray[:, -25:]    # 右边缘
-
-        if prev_top is not None:
-            # 计算各区域变化
-            center_diff = cv2.absdiff(prev_center, center)
-            left_diff = cv2.absdiff(prev_left_edge, left_edge)
-            right_diff = cv2.absdiff(prev_right_edge, right_edge)
-            top_diff = cv2.absdiff(prev_top, top)
-
-            _, center_thresh = cv2.threshold(center_diff, diff_threshold, 255, cv2.THRESH_BINARY)
-            _, left_thresh = cv2.threshold(left_diff, diff_threshold, 255, cv2.THRESH_BINARY)
-            _, right_thresh = cv2.threshold(right_diff, diff_threshold, 255, cv2.THRESH_BINARY)
-            _, top_thresh = cv2.threshold(top_diff, diff_threshold, 255, cv2.THRESH_BINARY)
-
-            center_change = cv2.countNonZero(center_thresh) / center.size
-            left_change = cv2.countNonZero(left_thresh) / left_edge.size
-            right_change = cv2.countNonZero(right_thresh) / right_edge.size
-            top_change = cv2.countNonZero(top_thresh) / top.size
-
-            # 任意区域有明显变化就判定为行车（上方路灯区域权重更高）
-            max_change = max(center_change, left_change, right_change, top_change * 2)
-            stable_ratio = 1 - max_change
-
-            # 低亮度环境下禁用停车检测（画面变化不可靠）
-            if brightness < 30:
-                stable_count = 0
-                is_parked = False
-            elif stable_ratio >= stable_threshold:
-                stable_count += 1
-                if stable_count >= max_stable_count:
-                    is_parked = True
-            else:
-                stable_count = 0
-                is_parked = False
-
-        prev_top = top
-        prev_center = center
-        prev_left_edge = left_edge
-        prev_right_edge = right_edge
 
         # 计算上方区域亮度（对数感知模型）
         center_gray = gray[8:38, 42:93]  # 上方区域
@@ -257,14 +310,52 @@ while not app.need_exit():
         else:
             brightness = 0
 
-    # 根据停车状态决定是否执行 YOLOv5 检测
-    if is_parked:
-        objs = []
-        border_color = image.COLOR_YELLOW
-        parked_border = 40  # 停车时加粗边框
-    else:
-        objs = detector.detect(img, conf_th=0.3, iou_th=0.45)
-        parked_border = border_thickness
+    # YOLOv5 检测
+    objs = detector.detect(img, conf_th=0.3, iou_th=0.45)
+
+    # ========== 近距离大目标检测优化 ==========
+    # 如果正常检测没有结果，尝试多尺度检测
+    if not objs:
+        # 方案1：缩小图像检测（让大目标变成正常尺寸）
+        small_img = img.resize(new_width // 2, new_height // 2)
+        small_objs = detector.detect(small_img, conf_th=0.3, iou_th=0.45)
+        if small_objs:
+            # 将坐标映射回原图
+            class ScaledObj:
+                def __init__(self, obj, scale=2):
+                    self.x = obj.x * scale
+                    self.y = obj.y * scale
+                    self.w = obj.w * scale
+                    self.h = obj.h * scale
+                    self.score = obj.score
+                    self.class_id = obj.class_id if hasattr(obj, 'class_id') else 0
+            objs = [ScaledObj(o) for o in small_objs]
+            print(f"[多尺度] 缩小检测到 {len(objs)} 个目标")
+
+    # 方案2：亮度检测补充（近距离尾灯很亮）
+    if not objs and frame_counter == 0:
+        # 检测画面中的高亮区域
+        cv_img = image.image2cv(img)
+        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+        # 高亮阈值（尾灯通常很亮）
+        _, bright_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        # 找轮廓
+        contours, _ = cv2.findContours(bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            # 过滤太小或太大的区域
+            if 500 < area < new_width * new_height * 0.3:
+                x, y, w, h = cv2.boundingRect(cnt)
+                # 宽高比过滤（尾灯通常是横向的）
+                if 0.5 < w / max(h, 1) < 5:
+                    class BrightObj:
+                        def __init__(self, x, y, w, h):
+                            self.x, self.y, self.w, self.h = x, y, w, h
+                            self.score = 0.5  # 亮度检测置信度
+                            self.class_id = 0
+                    objs.append(BrightObj(x, y, w, h))
+        if objs:
+            print(f"[亮度] 检测到 {len(objs)} 个高亮区域")
 
     # 目标平滑：如果当前没检测到但之前有，保持显示几帧
     if objs:
@@ -305,18 +396,11 @@ while not app.need_exit():
         right_objs = []
         screen_center = new_width // 2
 
-        # 调试：打印目标信息
-        print(f"--- 检测到 {len(objs)} 个目标 ---")
-
         for obj in objs:
             center_x = obj.x + obj.w // 2
             center_y = obj.y + obj.h // 2
             index = int(center_x * 24 / frame_width)
             index = min(max(index, 0), 23)
-
-            # 调试：打印每个目标的位置
-            side = "左" if center_x < screen_center else "右"
-            print(f"  目标: x={center_x}, y={center_y}, w={obj.w}, h={obj.h}, 区域={side}, score={obj.score:.2f}")
 
             # 目标距离估算（框越大距离越近）
             if obj.h > 100:
@@ -349,102 +433,83 @@ while not app.need_exit():
             else:
                 right_objs.append((obj, dist_label, direction))
 
-        # 绘制左侧合并框（从画面中心向左扩展）
+        # 计算左侧遮挡范围（从画面中心向左扩展）
         if left_objs:
-            left_box_hold = box_hold_frames  # 重置保持计数
             target_min_x = min(o[0].x for o in left_objs)
             target_min_y = min(o[0].y for o in left_objs)
             target_max_x = max(o[0].x + o[0].w for o in left_objs)
             target_max_y = max(o[0].y + o[0].h for o in left_objs)
 
-            # 右边界固定在画面中心
-            fixed_max_x = screen_center
-
+            # 直接使用目标的实际范围（不固定到中心）
             if left_box is None:
-                # 从画面中心开始（宽度为0）
-                left_box = (fixed_max_x, target_min_y, fixed_max_x, target_max_y)
-                print(f"[左框] 新建: 从画面中心 x={fixed_max_x} 开始")
+                left_box = (target_min_x, target_min_y, target_max_x, target_max_y)
 
             old_min_x, old_min_y, old_max_x, old_max_y = left_box
-            # 左边界只能向左扩展，不能向右收缩
-            if target_min_x < old_min_x:
-                new_min_x = old_min_x + (target_min_x - old_min_x) * box_smooth_speed
-            else:
-                new_min_x = old_min_x  # 保持不动
-            new_max_x = fixed_max_x  # 右边固定在画面中心
-            new_min_y = target_min_y
-            new_max_y = target_max_y
-            left_box = (int(new_min_x), new_min_y, new_max_x, new_max_y)
-            print(f"[左框] 更新: min_x={int(new_min_x)} -> {target_min_x}, 宽度={new_max_x - int(new_min_x)}")
+            # 平滑更新边界
+            new_min_x = old_min_x + (target_min_x - old_min_x) * box_smooth_speed
+            new_max_x = old_max_x + (target_max_x - old_max_x) * box_smooth_speed
+            left_box = (int(new_min_x), target_min_y, int(new_max_x), target_max_y)
 
-            min_x, min_y, max_x, max_y = left_box
-            if max_x - min_x > 2:
-                img.draw_rect(min_x, min_y, max_x - min_x, max_y - min_y, color=image.COLOR_BLUE, thickness=detected_border_thickness)
+            # 显示目标信息
             obj, dist_label, direction = left_objs[0]
             msg = f'{dist_label}{direction} {obj.score:.2f}'
             img.draw_string(target_min_x, target_min_y, msg, color=image.COLOR_WHITE)
-        else:
-            # 目标消失后保持几帧
-            if left_box_hold > 0:
-                left_box_hold -= 1
-                print(f"[左框] 保持中: 剩余 {left_box_hold} 帧")
-                if left_box is not None:
-                    min_x, min_y, max_x, max_y = left_box
-                    if max_x - min_x > 2:
-                        img.draw_rect(min_x, min_y, max_x - min_x, max_y - min_y, color=image.COLOR_BLUE, thickness=detected_border_thickness)
-            else:
-                if left_box is not None:
-                    print("[左框] 清除")
-                left_box = None
+            left_recover_col = None  # 有目标时停止恢复
 
-        # 绘制右侧合并框（从画面中心向右扩展）
+        # 计算右侧遮挡范围（从画面中心向右扩展）
         if right_objs:
-            right_box_hold = box_hold_frames  # 重置保持计数
             target_min_x = min(o[0].x for o in right_objs)
             target_min_y = min(o[0].y for o in right_objs)
             target_max_x = max(o[0].x + o[0].w for o in right_objs)
             target_max_y = max(o[0].y + o[0].h for o in right_objs)
 
-            # 左边界固定在画面中心
-            fixed_min_x = screen_center
-
+            # 使用实际目标范围（不固定在中心）
             if right_box is None:
-                # 从画面中心开始（宽度为0）
-                right_box = (fixed_min_x, target_min_y, fixed_min_x, target_max_y)
+                right_box = (target_min_x, target_min_y, target_max_x, target_max_y)
 
             old_min_x, old_min_y, old_max_x, old_max_y = right_box
-            # 右边界只能向右扩展，不能向左收缩
-            new_min_x = fixed_min_x  # 左边固定在画面中心
-            if target_max_x > old_max_x:
-                new_max_x = old_max_x + (target_max_x - old_max_x) * box_smooth_speed
-            else:
-                new_max_x = old_max_x  # 保持不动
-            new_min_y = target_min_y
-            new_max_y = target_max_y
-            right_box = (new_min_x, new_min_y, int(new_max_x), new_max_y)
+            # 左边界平滑移动到目标左边界
+            new_min_x = old_min_x + (target_min_x - old_min_x) * box_smooth_speed
+            # 右边界平滑移动到目标右边界
+            new_max_x = old_max_x + (target_max_x - old_max_x) * box_smooth_speed
+            right_box = (int(new_min_x), target_min_y, int(new_max_x), target_max_y)
 
-            min_x, min_y, max_x, max_y = right_box
-            if max_x - min_x > 2:
-                img.draw_rect(min_x, min_y, max_x - min_x, max_y - min_y, color=image.COLOR_BLUE, thickness=detected_border_thickness)
+            # 显示目标信息
             obj, dist_label, direction = right_objs[0]
             msg = f'{dist_label}{direction} {obj.score:.2f}'
             img.draw_string(target_min_x, target_min_y, msg, color=image.COLOR_WHITE)
-        else:
-            # 目标消失后保持几帧
-            if right_box_hold > 0:
-                right_box_hold -= 1
-                if right_box is not None:
-                    min_x, min_y, max_x, max_y = right_box
-                    if max_x - min_x > 2:
-                        img.draw_rect(min_x, min_y, max_x - min_x, max_y - min_y, color=image.COLOR_BLUE, thickness=detected_border_thickness)
-            else:
-                right_box = None
+            right_recover_col = None  # 有目标时停止恢复
 
         no_detection_count = 0
 
     else:
         no_detection_count += 1
         consecutive_detection_count = 0  # 重置连续检测计数
+
+        # 目标消失后的恢复动画（使用列号控制）
+        # 左侧恢复：从 shade_start 向 shade_end 推进（从左向右）
+        if left_shade_col_range is not None:
+            start_col, end_col = left_shade_col_range
+            if left_recover_col is None:
+                left_recover_col = float(start_col)  # 从遮挡的最左边开始
+            left_recover_col += recover_col_speed  # 向右推进
+            # 当恢复超过 end_col 时结束
+            if left_recover_col > end_col + 2:  # +2 是紫色宽度
+                left_box = None
+                left_recover_col = None
+                left_shade_col_range = None
+
+        # 右侧恢复：从 shade_end 向 shade_start 推进（从右向左）
+        if right_shade_col_range is not None:
+            start_col, end_col = right_shade_col_range
+            if right_recover_col is None:
+                right_recover_col = float(end_col)  # 从遮挡的最右边开始
+            right_recover_col -= recover_col_speed  # 向左推进
+            # 当恢复低于 start_col 时结束
+            if right_recover_col < start_col - 2:  # -2 是紫色宽度
+                right_box = None
+                right_recover_col = None
+                right_shade_col_range = None
 
         # print("空白归零：" + str(no_detection_count))
         border_color = image.COLOR_GREEN
@@ -454,7 +519,7 @@ while not app.need_exit():
             last_sent_number = -1
 
     # 绘制外边框（停车时黄色加粗）
-    img.draw_rect(0, 0, new_width, new_height, color=border_color, thickness=parked_border)
+    img.draw_rect(0, 0, new_width, new_height, color=border_color, thickness=border_thickness)
 
     # 如果已经添加蓝色方框，则绘制比绿色方框小一圈的蓝色方框
     if box_added:
@@ -486,37 +551,74 @@ while not app.need_exit():
             img.draw_string(gx+dx, gy+dy, gps_text, color=image.COLOR_BLACK, scale=2)
         img.draw_string(gx, gy, gps_text, color=image.COLOR_WHITE, scale=2)
 
-        # GPS 速度小于 3km/h 判定为停车
-        if gps_speed_kmh < 3:
-            is_parked = True
-        else:
-            is_parked = False
-            stable_count = 0
-
     # 在上方中间显示环境亮度（描边效果）
     lx, ly = new_width // 2 - 30, 35
     for dx, dy in [(-1,-1), (-1,1), (1,-1), (1,1)]:
         img.draw_string(lx+dx, ly+dy, f"L:{brightness}", color=image.COLOR_BLACK, scale=2)
     img.draw_string(lx, ly, f"L:{brightness}", color=image.COLOR_WHITE, scale=2)
 
-    # 画框标出亮度测量区域（上方区域）
-    bx, by, bw, bh = new_width//2 - 100, new_height//4 - 60, 200, 120
-    img.draw_rect(bx, by, bw, bh, color=image.COLOR_PURPLE, thickness=2)
+    # 绘制 LED 网格（左灯和右灯）
+    # 左灯：根据 left_box 计算遮挡范围（直接遮挡目标所在位置）
+    left_shade_start = LED_COLS  # 默认不遮挡
+    left_shade_end = LED_COLS - 1
+    left_is_recovering = False
+    left_rc = None  # 局部变量，避免与全局 left_recover_col 冲突
 
-    # 画出停车检测的四个区域（缩放比例 4x）
-    # 上方路灯区域 (top): gray[:25, 30:105]
-    img.draw_rect(120, 0, 300, 100, color=image.COLOR_ORANGE, thickness=2)
-    # 中心路面区域 (center): gray[40:70, 30:105]
-    img.draw_rect(120, 160, 300, 120, color=image.COLOR_GREEN, thickness=2)
-    # 左边缘 (left_edge): gray[:, :25]
-    img.draw_rect(0, 0, 100, 360, color=image.COLOR_WHITE, thickness=2)
-    # 右边缘 (right_edge): gray[:, -25:]
-    img.draw_rect(440, 0, 100, 360, color=image.COLOR_WHITE, thickness=2)
+    if left_recover_col is not None and left_shade_col_range is not None:
+        # 恢复动画中（优先判断）- 直接使用列号
+        left_is_recovering = True
+        left_shade_start, left_shade_end = left_shade_col_range
+        left_rc = int(left_recover_col)
+    elif left_box is not None:
+        min_x, _, max_x, _ = left_box
+        # 直接将目标位置映射到 LED 列号（目标在哪就遮哪）
+        left_shade_start = int(min_x * LED_COLS / screen_center)
+        left_shade_end = int(max_x * LED_COLS / screen_center)
+        left_shade_start = max(0, min(left_shade_start, LED_COLS - 1))
+        left_shade_end = max(0, min(left_shade_end, LED_COLS - 1))
+        # 记录当前遮挡范围（用于恢复动画）
+        left_shade_col_range = (left_shade_start, left_shade_end)
 
-    # 显示停车状态（黄色方块）
-    if is_parked:
-        img.draw_rect(new_width // 2 - 60, new_height // 2 - 40, 120, 80, color=image.COLOR_YELLOW, thickness=-1)
-        img.draw_string(new_width // 2 - 50, new_height // 2 - 15, "STOP", color=image.COLOR_BLACK, scale=3)
+    draw_led_grid(img, LED_LEFT_X, LED_GRID_Y, left_shade_start, left_shade_end, left_is_recovering, left_rc, is_left=True)
+
+    # 右灯：根据 right_box 计算遮挡范围（直接遮挡目标所在位置）
+    right_shade_start = 0
+    right_shade_end = -1  # 默认不遮挡
+    right_is_recovering = False
+    right_rc = None  # 局部变量
+
+    if right_recover_col is not None and right_shade_col_range is not None:
+        # 恢复动画中（优先判断）- 直接使用列号
+        right_is_recovering = True
+        right_shade_start, right_shade_end = right_shade_col_range
+        right_rc = int(right_recover_col)
+    elif right_box is not None:
+        min_x, _, max_x, _ = right_box
+        # 直接将目标位置映射到 LED 列号（目标在哪就遮哪）
+        right_shade_start = int((min_x - screen_center) * LED_COLS / (new_width - screen_center))
+        right_shade_end = int((max_x - screen_center) * LED_COLS / (new_width - screen_center))
+        right_shade_start = max(0, min(right_shade_start, LED_COLS - 1))
+        right_shade_end = max(0, min(right_shade_end, LED_COLS - 1))
+        # 记录当前遮挡范围（用于恢复动画）
+        right_shade_col_range = (right_shade_start, right_shade_end)
+
+    draw_led_grid(img, LED_RIGHT_X, LED_GRID_Y, right_shade_start, right_shade_end, right_is_recovering, right_rc, is_left=False)
+
+    # 发送遮挡状态到 ESP32（4字节：左起始、左结束、右起始、右结束）
+    # 255 表示无遮挡
+    # 恢复动画期间发送 255（全开）
+    if left_is_recovering:
+        l_start, l_end = 255, 255
+    else:
+        l_start = left_shade_start if left_shade_start <= left_shade_end else 255
+        l_end = left_shade_end if left_shade_start <= left_shade_end else 255
+
+    if right_is_recovering:
+        r_start, r_end = 255, 255
+    else:
+        r_start = right_shade_start if right_shade_start <= right_shade_end else 255
+        r_end = right_shade_end if right_shade_start <= right_shade_end else 255
+    send_shade_to_esp32(l_start, l_end, r_start, r_end)
 
     dis.show(img)
     # time.sleep(1)  # sleep some time to free some CPU usage
