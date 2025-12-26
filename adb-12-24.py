@@ -167,7 +167,7 @@ LED_SIZE = 8  # LED 直径
 LED_GAP = 1   # LED 间距
 LED_GRID_WIDTH = LED_COLS * (LED_SIZE + LED_GAP)  # 约 252 像素
 LED_GRID_HEIGHT = LED_ROWS * (LED_SIZE + LED_GAP)  # 约 36 像素
-LED_GRID_Y = new_height - 110  # 底部，不遮挡FPS
+LED_GRID_Y = new_height - 100  # 底部，不遮挡FPS
 LED_LEFT_X = 10  # 左灯网格起始 X
 LED_RIGHT_X = new_width - LED_GRID_WIDTH - 10  # 右灯网格起始 X
 
@@ -233,7 +233,7 @@ def draw_led_grid(img, grid_x, grid_y, shade_start_col, shade_end_col, is_recove
 
             # 下两排（第2、3行）始终点亮
             if row >= 2:
-                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_WHITE, thickness=-1)
+                img.draw_rect(x, y, LED_SIZE, LED_SIZE, color=image.COLOR_WHITE, thickness=-1)
                 continue
 
             # 上两排判断是否被遮挡
@@ -258,11 +258,11 @@ def draw_led_grid(img, grid_x, grid_y, shade_start_col, shade_end_col, is_recove
                         is_shaded = False  # 已恢复的不再是灰色
 
             if is_shaded:
-                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_GRAY, thickness=-1)
+                img.draw_rect(x, y, LED_SIZE, LED_SIZE, color=image.COLOR_GRAY, thickness=-1)
             elif is_recovered:
-                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_PURPLE, thickness=-1)
+                img.draw_rect(x, y, LED_SIZE, LED_SIZE, color=image.COLOR_PURPLE, thickness=-1)
             else:
-                img.draw_circle(x + LED_SIZE//2, y + LED_SIZE//2, LED_SIZE//2, color=image.COLOR_WHITE, thickness=-1)
+                img.draw_rect(x, y, LED_SIZE, LED_SIZE, color=image.COLOR_WHITE, thickness=-1)
 
 def logo():
     logo_path = "/root/logo320.png"
